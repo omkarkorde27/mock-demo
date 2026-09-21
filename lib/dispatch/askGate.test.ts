@@ -186,3 +186,46 @@ describe("suppression classes", () => {
     expect(r.suppressed.length).toBeGreaterThan(0);
   });
 });
+
+describe("assumption text matches the actual situation", () => {
+  const safetyQ = (o: { safetyHazard: boolean; dispatching?: boolean }) =>
+    askGate({
+      facts: facts({ safetyHazard: o.safetyHazard, lossInProgress: false, equipmentInoperable: false }),
+      confidence: 0.9, uncertainFields: ["safety_hazard"],
+      resolution: MATCHED, location: HARBOR, now: NOW,
+      dispatching: o.dispatching,
+    });
+
+  it("says 'more urgent reading' only when the baseline really is the most urgent", () => {
+    // Extracted safety=true -> baseline P1, the alternative is P4.
+    const r = safetyQ({ safetyHazard: true });
+    expect(r.baseline.tier).toBe("P1");
+    expect(r.assumption).toContain("more urgent reading");
+  });
+
+  // The bug: baseline P4, alternative P1, and the old template still claimed
+  // the more urgent reading had been chosen.
+  it("does NOT claim the more urgent reading when it dispatched the milder one", () => {
+    const r = safetyQ({ safetyHazard: false });
+    expect(r.baseline.tier).toBe("P4");
+    expect(r.assumption).not.toContain("more urgent reading");
+    expect(r.assumption).toContain("what the intake actually said");
+  });
+
+  it("names the downside so the operator knows the cost of not replying", () => {
+    const r = safetyQ({ safetyHazard: false });
+    expect(r.assumption).toMatch(/If the answer is .+, this becomes P1/);
+  });
+
+  it("does not talk about dispatching at all when nothing will be dispatched", () => {
+    const r = safetyQ({ safetyHazard: false, dispatching: false });
+    expect(r.assumption).toContain("Nothing is being dispatched either way");
+    expect(r.assumption).not.toContain("Answer not required");
+    expect(r.assumption).not.toContain("more urgent reading");
+  });
+
+  it("still calls an equal-urgency tie a tie", () => {
+    const r = run({ confidence: 0.7, resolution: AMBIGUOUS });
+    expect(r.assumption).toContain("equally urgent");
+  });
+});

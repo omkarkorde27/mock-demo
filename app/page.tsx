@@ -1,11 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { ScenarioChips } from "@/components/ScenarioChips";
 import { SuppressedQuestions } from "@/components/SuppressedQuestions";
 import { TraceFooter } from "@/components/TraceFooter";
 import { WorkOrderCard } from "@/components/WorkOrderCard";
 import { FollowUp } from "@/components/FollowUp";
+import { PipelineTrace } from "@/components/PipelineTrace";
 import type { IntakeResponse } from "@/lib/intakeTypes";
 
 export default function Home() {
@@ -14,9 +15,14 @@ export default function Home() {
   const [result, setResult] = useState<IntakeResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // `pending` is read from a closure, so two clicks inside one tick would both
+  // see false and fire two requests. A ref is checked and set synchronously.
+  const inFlight = useRef(false);
+
   async function submit(value: string) {
     const body = value.trim();
-    if (!body || pending) return;
+    if (!body || inFlight.current) return;
+    inFlight.current = true;
     setPending(true);
     setError(null);
     setResult(null);
@@ -32,6 +38,7 @@ export default function Home() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
+      inFlight.current = false;
       setPending(false);
     }
   }
@@ -53,7 +60,10 @@ export default function Home() {
         </p>
       </header>
 
-      <div className="mt-8 space-y-4">
+      <div
+        className={`mt-8 space-y-4 transition-opacity ${pending ? "pointer-events-none opacity-45" : ""}`}
+        aria-busy={pending}
+      >
         <ScenarioChips
           disabled={pending}
           onPick={(t) => { setText(t); void submit(t); }}
@@ -76,18 +86,19 @@ export default function Home() {
             <button
               type="submit"
               disabled={pending || !text.trim()}
-              className="rounded-md bg-[var(--foreground)] px-4 py-2 text-sm font-medium text-[var(--background)] transition-opacity disabled:opacity-40"
+              className="rounded-md bg-[var(--foreground)] px-4 py-2 text-sm font-medium text-[var(--background)] transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
             >
               {pending ? "Reading…" : "Create work order"}
             </button>
-            {pending && (
-              <span className="text-xs text-[var(--muted)]">
-                one model call, then the deterministic steps
-              </span>
-            )}
           </div>
         </form>
       </div>
+
+      {pending && (
+        <div className="mt-8">
+          <PipelineTrace />
+        </div>
+      )}
 
       {error && (
         <p className="mt-6 rounded-lg border border-[var(--border)] bg-[var(--card)] p-4 text-sm text-[var(--stop)]">

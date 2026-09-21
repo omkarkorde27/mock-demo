@@ -166,8 +166,11 @@ export function askGate(input: {
   resolution: AssetResolution;
   location: LocationHours;
   now: Date;
+  /** False when gate() already decided nothing will be dispatched. */
+  dispatching?: boolean;
 }): AskGateResult {
   const { facts, confidence, uncertainFields, resolution, location, now } = input;
+  const dispatching = input.dispatching ?? true;
 
   const run = (f: DispatchFacts, asset: ResolvableAsset | null): Dispatch =>
     dispatchFor(f, asset, location, now);
@@ -313,22 +316,53 @@ export function askGate(input: {
   );
   const baselineLabel =
     baselineIndex >= 0 ? winner.candidate.options[baselineIndex]?.label : undefined;
-
-  // Be honest about WHY this candidate was assumed. If every candidate lands
-  // on the same respond-by there was no more-urgent reading to pick, and
-  // claiming otherwise dresses an arbitrary tie-break up as a judgement.
-  const times = new Set(
-    winner.candidate.variants.map((v) => v.dispatch.respondBy.at.getTime()),
-  );
-  const tied = times.size === 1;
-
   const assumed = baselineLabel ? ` Assumed: ${baselineLabel}.` : "";
-  const assumption = tied
-    ? `Answer not required. Every option here is equally urgent, so this was not a judgement call --` +
+  const changed = winner.changes.join(", ");
+
+  // Be exact about WHY this candidate was assumed. Three different situations
+  // that a single template cannot honestly cover:
+  //
+  //   tied            no candidate is more urgent; the pick was arbitrary
+  //   baseline worst  we assumed the cautious reading
+  //   baseline better we assumed what the intake SAID, and the other answer is
+  //                   worse -- which the operator needs told, because it is the
+  //                   downside risk of not replying
+  //
+  // The old template claimed "the more urgent reading" in every untied case,
+  // including ones where the baseline was the LESS urgent option. That is the
+  // same class of error as claiming a judgement on an arbitrary tie-break.
+  const times = winner.candidate.variants.map((v) => v.dispatch.respondBy.at.getTime());
+  const earliest = Math.min(...times);
+  const tied = earliest === Math.max(...times);
+  const baselineIsMostUrgent = baseline.respondBy.at.getTime() === earliest;
+
+  const worstIndex = times.indexOf(earliest);
+  const worstLabel = winner.candidate.options[worstIndex]?.label;
+  const worstTier = winner.candidate.variants[worstIndex]?.dispatch.tier;
+
+  let assumption: string;
+  if (!dispatching) {
+    // Nothing is going out, so any sentence about how it was dispatched is a lie.
+    assumption =
+      `Nothing is being dispatched either way — this is the question a human should be asked first.` +
+      (baselineLabel ? ` Working assumption: ${baselineLabel}.` : "") +
+      ` An answer would change ${changed}.`;
+  } else if (tied) {
+    assumption =
+      `Answer not required. Every option here is equally urgent, so this was not a judgement call —` +
       ` one was assumed so the work order could go out.${assumed}` +
-      ` Answering changes ${winner.changes.join(", ")}.`
-    : `Answer not required. Until someone replies this is dispatched on the more urgent reading.${assumed}` +
-      ` Answering changes ${winner.changes.join(", ")}.`;
+      ` Answering changes ${changed}.`;
+  } else if (baselineIsMostUrgent) {
+    assumption =
+      `Answer not required. Until someone replies this is dispatched on the more urgent reading.${assumed}` +
+      ` Answering changes ${changed}.`;
+  } else {
+    assumption =
+      `Answer not required. This is dispatched on what the intake actually said.${assumed}` +
+      (worstLabel && worstTier
+        ? ` If the answer is “${worstLabel}”, this becomes ${worstTier} and ${changed} change.`
+        : ` Answering changes ${changed}.`);
+  }
 
   return {
     asked: {

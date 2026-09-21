@@ -6,6 +6,7 @@ import { resolveAsset, type ResolvableAsset } from "@/lib/dispatch/resolveAsset"
 import { WARRANTY_PROVENANCE } from "@/lib/dispatch/warrantyFlag";
 import { assetsAtLocation, listLocations } from "@/lib/db/assets";
 import { appendEvents } from "@/lib/db/events";
+import { checkIntakeRate } from "@/lib/db/rateLimit";
 import { insertWorkOrder } from "@/lib/db/workOrders";
 import { extractFacts, PROMPT_VERSION } from "@/lib/llm/extract";
 import type { Trade } from "@/lib/llm/vocab";
@@ -67,6 +68,20 @@ export async function POST(request: Request) {
 
     const assets = await assetsAtLocation(location.id);
 
+    // Checked before the model call, because the model call is the cost.
+    const rate = await checkIntakeRate();
+    if (!rate.allowed) {
+      return NextResponse.json(
+        {
+          error:
+            `This demo is capped at ${rate.cap} intakes an hour and has used ${rate.used}. ` +
+            `It is a public link with a real API key behind it, so the cap is the point. Try again shortly.`,
+          rateLimited: true,
+        },
+        { status: 429, headers: { "Retry-After": String(rate.retryAfterSeconds) } },
+      );
+    }
+
     // ---- the one model call ----
     const extraction = await extractFacts(text);
     const f = extraction.value;
@@ -98,6 +113,11 @@ export async function POST(request: Request) {
       resolution,
       location,
       now: new Date(),
+      // An assumption sentence about how this was dispatched is false when
+      // nothing is being dispatched.
+      dispatching:
+        gateResult.status === "dispatchable" ||
+        gateResult.status === "dispatchable_with_assumption",
     });
 
     const dispatch = askResult.baseline;
